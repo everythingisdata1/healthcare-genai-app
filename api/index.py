@@ -1,86 +1,68 @@
 import os
+
 from fastapi import FastAPI, Depends
-from fastapi_clerk_auth import (
-    ClerkConfig,
-    ClerkHTTPBearer,
-    HTTPAuthorizationCredentials,
-)
+from fastapi_clerk_auth import ClerkConfig, ClerkHTTPBearer, HTTPAuthorizationCredentials
 from openai import OpenAI
+from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
-app = FastAPI()
+app = FastAPI(title="HealthCareGenAI API")
 
-# Clerk
-clerk_config = ClerkConfig(
-    jwks_url=os.getenv("CLERK_JWKS_URL")
-)
-
-clerk_guard = ClerkHTTPBearer(clerk_config)
+clerk_config = ClerkConfig(jwks_url=os.getenv("CLERK_JWKS_URL"))
+clerk_guard = ClerkHTTPBearer(config=clerk_config)
 
 
-@app.get("/api")
-async def read_api(
-    creds: HTTPAuthorizationCredentials = Depends(clerk_guard),
-):
+class Visit(BaseModel):
+    patient_name: str
+    date_of_visit: str
+    notes: str
 
-    print("STEP 1 → Clerk auth success")
-    print("USER:", creds.decoded["sub"])
 
-    client = OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY")
-    )
-
-    stream = client.chat.completions.create(
-        model="gpt-5-nano",
-        messages=[
-            {
-                "role": "user",
-                "content": """
-Generate one healthcare business idea.
-
-Return:
-- Name
-- Description
-- Revenue model
-- Differentiators
-- Risks
-- MVP
+system_prompt = """
+You are provided with notes written by a doctor from a patient's visit.  
+Your task is to summarize the visit for the doctor and provide email. 
+Reply with executly thee section with headling 
+### Summary of the visit for doctor's records. 
+### Next steps for the doctor. 
+### Draft an Email to the patient in patient friendly language. 
 """
-            }
-        ],
-        stream=True,
-    )
 
-    async def generate():
 
-        try:
+def user_prompt_for_visit(visit: Visit) -> str:
+    return f"""
+   Create a summery, next steps and email for the following visit notes:
+   Patient Name: {visit.patient_name}
+   Doctor Name: {visit.date_of_visit} 
+   Visit Notes:    {visit.notes}
+    """
 
-            for chunk in stream:
 
-                content = chunk.choices[0].delta.content
+@app.post("/api", response_class=StreamingResponse)
+async def summarize_visit(visit: Visit, creds: HTTPAuthorizationCredentials = Depends(clerk_guard)):
+    user_id = creds.decoded["sub"]
+    print(f"User {user_id} is summarizing a visit.")
+    openai_client = OpenAI()
 
-                if content:
-                    print("SEND:", repr(content))
+    user_prompt = user_prompt_for_visit(visit)
+    print(f"User Prompt: {user_prompt}")
 
-                    yield f"data: {content}\n\n"
+    prompt = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+    stream = openai_client.chat.completions.create(stream=True, model="gpt-5-nano", messages=prompt)
 
-            print("STREAM COMPLETE")
+    def event_stream():
+        for chunk in stream:
+            text = chunk.choices[0].delta.content
+            print(f"text received: {text}")
 
-            yield "event: end\ndata: complete\n\n"
+            if text:
+                lines = text.split("\n")
+                print(f"lines received: {lines}")
+                for line in lines[:-1]:
+                    yield f"data: {line}\n\n"
+                    yield "data:  \n"
+                yield f"data: {lines[-1]}\n\n"
 
-        except Exception as e:
-
-            print("STREAM ERROR:", str(e))
-
-            yield f"event: error\ndata: {str(e)}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers={
-            "Content-Type": "text/event-stream",
-            "Cache-Control": "no-cache, no-transform",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
