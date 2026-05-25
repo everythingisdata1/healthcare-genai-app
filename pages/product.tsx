@@ -37,34 +37,71 @@ function ConsultationForm() {
 
       let result = "";
 
-      await fetchEventSource("/api", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          patient_name: patientName,
-          date_of_visit: visitDate?.toISOString().split("T")[0],
-          notes,
-        }),
+       await fetchEventSource("/api", {
+  method: "POST",
 
-        onmessage(event) {
-          result += event.data;
-          setOutput(result);
-        },
+  headers: {
+    Authorization: `Bearer ${jwt}`,
+    "Content-Type": "application/json",
+  },
 
-        onclose() {
-          setLoading(false);
-        },
+  body: JSON.stringify({
+    patient_name: patientName,
+    date_of_visit: visitDate?.toISOString().split("T")[0],
+    notes,
+  }),
 
-        onerror(err) {
-          console.error(err);
-          setOutput("Failed to generate summary");
-          setLoading(false);
-          throw err;
-        },
-      });
+  async onopen(response) {
+    console.log("STATUS:", response.status);
+
+    if (!response.ok) {
+      const body = await response.text();
+
+      console.log("SERVER:", body);
+
+      setOutput(
+        `Server Error (${response.status}):\n${body}`
+      );
+
+      throw new Error(body);
+    }
+
+    const type =
+      response.headers.get("content-type");
+
+    console.log(type);
+
+    if (
+      !type?.includes("text/event-stream")
+    ) {
+      throw new Error(
+        `Expected SSE but got ${type}`
+      );
+    }
+  },
+
+  onmessage(event) {
+    setOutput((prev) => prev + event.data);
+  },
+
+  onclose() {
+    setLoading(false);
+  },
+
+  onerror(err) {
+    console.error(err);
+
+    setOutput(
+      err instanceof Error
+        ? err.message
+        : "Unknown error"
+    );
+
+    setLoading(false);
+
+    throw err;
+  },
+});
     } catch (err) {
       console.error(err);
       setLoading(false);
