@@ -1,278 +1,311 @@
 "use client";
 
-import { useState, FormEvent } from "react";
-import { useAuth, useUser, UserButton } from "@clerk/nextjs";
-import DatePicker from "react-datepicker";
-import "react-datepicker/dist/react-datepicker.css";
+import { FormEvent, useState } from "react";
+import Link from "next/link";
+import {
+  useAuth,
+  UserButton,
+} from "@clerk/nextjs";
 
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import remarkBreaks from "remark-breaks";
-import { fetchEventSource } from "@microsoft/fetch-event-source";
-
-function ConsultationForm() {
+export default function ProductPage() {
   const { getToken } = useAuth();
 
-  const [patientName, setPatientName] = useState("");
-  const [visitDate, setVisitDate] = useState<Date | null>(new Date());
-  const [notes, setNotes] = useState("");
+  const [patientName, setPatientName] =
+    useState("");
 
-  const [output, setOutput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [visitDate, setVisitDate] =
+    useState("");
 
-  async function handleSubmit(e: FormEvent) {
+  const [notes, setNotes] =
+    useState("");
+
+  const [output, setOutput] =
+    useState("");
+
+  const [loading, setLoading] =
+    useState(false);
+
+  async function handleSubmit(
+    e: FormEvent
+  ) {
     e.preventDefault();
 
     setLoading(true);
     setOutput("");
 
     try {
-      const jwt = await getToken();
+      const jwt = await getToken({
+        skipCache: true,
+      });
 
       if (!jwt) {
-        setOutput("Authentication required");
+        setOutput(
+          "Authentication required"
+        );
+
         setLoading(false);
         return;
       }
 
-      let result = "";
+      const response = await fetch(
+        "/api/consultation",
+        {
+          method: "POST",
 
-       await fetchEventSource("/api", {
-  method: "POST",
+          headers: {
+            Authorization: `Bearer ${jwt}`,
+            "Content-Type":
+              "application/json",
+          },
 
-  headers: {
-    Authorization: `Bearer ${jwt}`,
-    "Content-Type": "application/json",
-  },
-
-  body: JSON.stringify({
-    patient_name: patientName,
-    date_of_visit: visitDate?.toISOString().split("T")[0],
-    notes,
-  }),
-
-  async onopen(response) {
-    console.log("STATUS:", response.status);
-
-    if (!response.ok) {
-      const body = await response.text();
-
-      console.log("SERVER:", body);
-
-      setOutput(
-        `Server Error (${response.status}):\n${body}`
+          body: JSON.stringify({
+            patient_name: patientName,
+            date_of_visit: visitDate,
+            notes,
+          }),
+        }
       );
 
-      throw new Error(body);
-    }
+      if (!response.ok) {
+        const errorText =
+          await response.text();
 
-    const type =
-      response.headers.get("content-type");
+        throw new Error(
+          `HTTP ${response.status}: ${errorText}`
+        );
+      }
 
-    console.log(type);
+      if (!response.body) {
+        throw new Error(
+          "Streaming not supported"
+        );
+      }
 
-    if (
-      !type?.includes("text/event-stream")
-    ) {
-      throw new Error(
-        `Expected SSE but got ${type}`
-      );
-    }
-  },
+      const reader =
+        response.body.getReader();
 
-  onmessage(event) {
-    setOutput((prev) => prev + event.data);
-  },
+      const decoder =
+        new TextDecoder();
 
-  onclose() {
-    setLoading(false);
-  },
+      let accumulatedText = "";
 
-  onerror(err) {
-    console.error(err);
+      while (true) {
+        const { done, value } =
+          await reader.read();
 
-    setOutput(
-      err instanceof Error
-        ? err.message
-        : "Unknown error"
-    );
+        if (done) {
+          break;
+        }
 
-    setLoading(false);
+        const chunk =
+          decoder.decode(value, {
+            stream: true,
+          });
 
-    throw err;
-  },
-});
+        console.log(
+          "RAW CHUNK:",
+          chunk
+        );
+
+        // Proper SSE parsing
+        const lines = chunk
+          .split("\n")
+          .filter((line) =>
+            line.startsWith("data:")
+          );
+
+        for (const line of lines) {
+          const text = line
+            .replace("data:", "")
+            .trim();
+
+          accumulatedText +=
+            text + " ";
+
+          setOutput(
+            accumulatedText
+          );
+        }
+      }
     } catch (err) {
       console.error(err);
+
+      setOutput(
+        err instanceof Error
+          ? err.message
+          : "Unknown error"
+      );
+    } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-10">
+    <main className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800">
+      <div className="container mx-auto px-4 py-10">
 
-      {/* Header */}
-      <div className="flex items-center justify-between mb-10">
-        <div>
-          <h1 className="text-5xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
-            Consultation Notes
-          </h1>
+        {/* Navigation */}
 
-          <p className="mt-2 text-gray-500">
-            Generate AI-powered consultation summaries
-          </p>
-        </div>
+        <nav className="flex justify-between items-center mb-10">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-200">
+              MediNotes Pro
+            </h1>
 
-        <UserButton />
-      </div>
+            <p className="text-gray-500 mt-1">
+              AI-powered consultation
+              assistant
+            </p>
+          </div>
 
-      {/* Form */}
-      <form
-        onSubmit={handleSubmit}
-        className="bg-white dark:bg-gray-900 rounded-3xl shadow-xl p-8 border border-gray-200 dark:border-gray-800 space-y-6"
-      >
-        <div>
-          <label className="block mb-2 font-medium">
-            Patient Name
-          </label>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/"
+              className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-5 py-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 transition"
+            >
+              Home
+            </Link>
 
-          <input
-            required
-            value={patientName}
-            onChange={(e) => setPatientName(e.target.value)}
-            placeholder="Enter patient name"
-            className="w-full rounded-xl border border-gray-300 px-5 py-3 outline-none focus:ring-4 focus:ring-blue-200"
-          />
-        </div>
+            <UserButton />
+          </div>
+        </nav>
 
-        <div>
-          <label className="block mb-2 font-medium">
-            Date of Visit
-          </label>
+        {/* Main Grid */}
 
-          <DatePicker
-            selected={visitDate}
-            onChange={(d: Date | null) => setVisitDate(d)}
-            dateFormat="yyyy-MM-dd"
-            wrapperClassName="w-full"
-            className="w-full rounded-xl border border-gray-300 px-5 py-3 outline-none focus:ring-4 focus:ring-blue-200"
-          />
-        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
 
-        <div>
-          <label className="block mb-2 font-medium">
-            Consultation Notes
-          </label>
+          {/* Left Panel */}
 
-          <textarea
-            rows={8}
-            required
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Enter detailed consultation notes..."
-            className="w-full rounded-xl border border-gray-300 px-5 py-3 outline-none focus:ring-4 focus:ring-blue-200 resize-none"
-          />
-        </div>
+          <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-xl p-8 border border-gray-100 dark:border-gray-800">
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="
-            w-full
-            rounded-xl
-            bg-gradient-to-r
-            from-blue-600
-            to-indigo-600
-            py-4
-            text-white
-            font-semibold
-            shadow-lg
-            hover:scale-[1.01]
-            transition
-            disabled:opacity-60
-          "
-        >
-          {loading
-            ? "Generating Summary..."
-            : "Generate Summary"}
-        </button>
-      </form>
-
-      {/* Output */}
-      {output && (
-        <section className="mt-10">
-
-          <div className="rounded-3xl bg-white dark:bg-gray-900 shadow-xl border border-gray-200 dark:border-gray-800 p-8">
-
-            <h2 className="text-2xl font-bold mb-6">
-              Generated Summary
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-6">
+              Patient Visit Details
             </h2>
 
-            <div
-              className="
-                prose
-                prose-blue
-                dark:prose-invert
-                max-w-none
-              "
+            <form
+              onSubmit={handleSubmit}
+              className="space-y-6"
             >
-              <ReactMarkdown
-                remarkPlugins={[
-                  remarkGfm,
-                  remarkBreaks,
-                ]}
+
+              {/* Patient Name */}
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  Patient Name
+                </label>
+
+                <input
+                  type="text"
+                  value={patientName}
+                  onChange={(e) =>
+                    setPatientName(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Enter patient name"
+                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* Visit Date */}
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  Visit Date
+                </label>
+
+                <input
+                  type="date"
+                  value={visitDate}
+                  onChange={(e) =>
+                    setVisitDate(
+                      e.target.value
+                    )
+                  }
+                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {/* Notes */}
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                  Doctor's Notes
+                </label>
+
+                <textarea
+                  rows={10}
+                  value={notes}
+                  onChange={(e) =>
+                    setNotes(
+                      e.target.value
+                    )
+                  }
+                  placeholder="Enter patient consultation notes..."
+                  className="w-full px-4 py-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                />
+              </div>
+
+              {/* Button */}
+
+              <button
+                type="submit"
+                disabled={loading}
+                className={`w-full py-4 rounded-xl text-white font-semibold transition ${
+                  loading
+                    ? "bg-gray-400 cursor-not-allowed"
+                    : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-90"
+                }`}
               >
-                {output}
-              </ReactMarkdown>
+                {loading
+                  ? "Generating..."
+                  : "Generate Summary"}
+              </button>
+
+            </form>
+          </div>
+
+          {/* Right Panel */}
+
+          <div className="bg-white dark:bg-gray-900 rounded-3xl shadow-xl p-8 border border-gray-100 dark:border-gray-800 flex flex-col">
+
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">
+                AI Generated Output
+              </h2>
+
+              {loading && (
+                <span className="text-blue-600 font-medium animate-pulse">
+                  Streaming...
+                </span>
+              )}
+            </div>
+
+            <div className="flex-1 min-h-[500px] bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl p-6 overflow-y-auto whitespace-pre-line text-gray-800 dark:text-gray-200 leading-8">
+              {output ? (
+                output
+              ) : (
+                <div className="text-gray-400">
+                  AI response will
+                  appear here...
+                </div>
+              )}
             </div>
 
           </div>
+        </div>
 
-        </section>
-      )}
-    </div>
-  );
-}
+        {/* Footer */}
 
-function PricingFallback() {
-  return (
-    <div className="max-w-2xl mx-auto text-center py-24">
+        <div className="text-center text-sm text-gray-500 mt-10">
+          <p>
+            AI-generated medical
+            summaries for demonstration
+            purposes only
+          </p>
+        </div>
 
-      <h1 className="text-5xl font-bold mb-6">
-        Healthcare Professional
-      </h1>
-
-      <p className="text-gray-500 mb-8">
-        Upgrade to unlock consultation generation.
-      </p>
-
-      <button
-        className="
-          rounded-xl
-          bg-blue-600
-          px-8
-          py-4
-          text-white
-          hover:bg-blue-700
-        "
-      >
-        Upgrade Plan
-      </button>
-
-    </div>
-  );
-}
-
-export default function Product() {
-  const { isSignedIn } = useUser();
-
-  if (!isSignedIn) {
-    return <PricingFallback />;
-  }
-
-  return (
-    <main className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 dark:from-gray-950 dark:to-black">
-      <ConsultationForm />
+      </div>
     </main>
   );
 }
